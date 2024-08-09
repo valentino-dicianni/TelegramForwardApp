@@ -9,41 +9,27 @@ import re
 import time
 from logging.handlers import QueueListener, RotatingFileHandler
 from multiprocessing import freeze_support
-from pprint import pprint
-
 import PySimpleGUI as sg
+from openai import OpenAI
 from telethon import TelegramClient, events
 
 THEME = 'LightBlue'
 ADD_WIN = None
 rules_list = []
-emoji_pattern = re.compile("["
-                           u"\U0001F600-\U0001F64F"  # emoticons
-                           u"\U0001F300-\U0001F5FF"  # symbols & pictographs
-                           u"\U0001F680-\U0001F6FF"  # transport & map symbols
-                           u"\U0001F1E0-\U0001F1FF"  # flags (iOS)
-                           u"\U0001F1F2-\U0001F1F4"  # Macau flag
-                           u"\U0001F1E6-\U0001F1FF"  # flags
-                           u"\U0001F600-\U0001F64F"
-                           u"\U00002702-\U000027B0"
-                           u"\U000024C2-\U0001F251"
-                           u"\U0001f926-\U0001f937"
-                           u"\U0001F1F2"
-                           u"\U0001F1F4"
-                           u"\U0001F620"
-                           u"\u200d"
-                           u"\u2640-\u2642"
-                           "]+", flags=re.UNICODE)
-special_char = re.compile("[^A-Za-z0-9ßćéāēèêáúüřťôíостанвиьпер. ,\n]+")
 
 ERROR = -1
 BASE_PATH = os.environ['APPDATA'] + "\\TelegramForward\\"
 LOG_PATH = BASE_PATH + "Logs\\"
 RULES_PATH = BASE_PATH + "rules.txt"
+
 api_id = 1271225
 api_hash = 'f36c296645a468c16a698ecb1e59e31b'
 username = ""
 user_id = ""
+
+client = OpenAI(
+    api_key="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",
+)
 
 if not os.path.exists(BASE_PATH):
     os.makedirs(BASE_PATH)
@@ -52,24 +38,37 @@ if not os.path.exists(LOG_PATH):
 
 
 class Rule:
-    def __init__(self, form_id, to_ids=None, keywords=None):
+    def __init__(self, form_id, to_ids=None, prompt_gpt="", keywords=None):
         self.from_id = int(form_id)
         self.to_ids = [] if to_ids is None else to_ids
         self.keywords = [] if keywords is None else keywords
+        self.prompt_gpt = prompt_gpt
 
     @classmethod
     def from_string(cls, string_rule):
         split_str = string_rule.split('->')
         to_list = None
         keys_list = None
+        prompt = None
         if len(split_str) > 1:
             to_list = list(map(lambda x: x.strip(), split_str[1].split(",")))
-        if len(split_str) > 2:
+        if len(split_str) > 2 and split_str[2].strip() != "":
             keys_list = list(map(lambda x: x.strip(), split_str[2].split(",")))
-        return cls(split_str[0], to_list, keys_list)
+        if len(split_str) > 3 and split_str[3].strip() != "":
+            prompt = split_str[3].strip()
+        return cls(split_str[0], to_list, prompt_gpt=prompt, keywords=keys_list)
 
     def rule_to_string(self):
-        return f"{self.from_id}->{','.join(self.to_ids)}->{','.join(self.keywords)}"
+        base_str = f"From: {self.from_id} To: {','.join(self.to_ids)}"
+        if len(self.keywords) > 0:
+            base_str += f" - Filter: {','.join(self.keywords)}"
+        if self.prompt_gpt != "":
+            base_str += f" - PromptGPT: {self.prompt_gpt}"
+
+        return base_str
+
+    def rule_to_file(self):
+        return f"{self.from_id}->{','.join(self.to_ids)}->{','.join(self.keywords)}->{self.prompt_gpt}"
 
 
 def logger_init():
@@ -223,11 +222,27 @@ def find_rule_by_sender_id(uid, r_list):
 
 
 def find_keyword_in_msg(rule, text):
+    if len(rule.keywords) == 0:
+        return True
+
     for k in rule.keywords:
         if k.lower() in text.lower():
             return True
 
     return False
+
+
+def gpt4_query(prompt, max_tokens=100):
+    chat_completion = client.chat.completions.create(
+        messages=[
+            {
+                "role": "user",
+                "content": prompt,
+            }
+        ],
+        model="gpt-3.5-turbo",
+    )
+    return chat_completion.choices[0].message.content
 
 
 async def start_telegram_loop(uid):
@@ -252,14 +267,22 @@ async def start_telegram_loop(uid):
             rules_local = get_rules_from_file()
             logging.info(f"recived message from {sender.id}")
 
-            isRule, rules = find_rule_by_sender_id(sender.id, rules_local)
-            if isRule:
+            is_rule, rules = find_rule_by_sender_id(sender.id, rules_local)
+
+            if is_rule:
                 msg = event.message
                 for r in rules:
                     to_chat = int(r.to_ids[0])
 
                     if find_keyword_in_msg(r, msg.text):
-                        await client.send_message(to_chat, msg, silent=False)
+                        if r.prompt_gpt != "":
+                            final_prompt = f"{str(r.prompt_gpt)} '{str(msg.text)}'"
+                            logging.info(final_prompt)
+                            gpt_res = gpt4_query(final_prompt)
+
+                            await client.send_message(to_chat, gpt_res, silent=False)
+                        else:
+                            await client.send_message(to_chat, msg, silent=False)
 
         except Exception as e:
             logging.error("Error: " + str(e))
@@ -433,12 +456,14 @@ def validate_code(code):
         return False
 
 
-def dump_rules_to_file(rules):
+def dump_rules_to_file(rules, path=None):
+    if path is None:
+        path = RULES_PATH
     try:
         logging.info("Dumping rules to file...")
-        with io.open(RULES_PATH, 'w+', encoding="utf-8") as file:
+        with io.open(path, 'w+', encoding="utf-8") as file:
             for r in rules:
-                file.write(r.rule_to_string())
+                file.write(r.rule_to_file())
                 file.write("\n")
         return True
     except Exception as e:
@@ -446,14 +471,16 @@ def dump_rules_to_file(rules):
         return False
 
 
-def get_rules_from_file():
+def get_rules_from_file(path=None):
     rules_result = []
+    if path is None:
+        path = RULES_PATH
 
-    if not os.path.exists(RULES_PATH):
+    if not os.path.exists(path):
         return []
 
     try:
-        with io.open(RULES_PATH, 'r', encoding="utf-8") as file:
+        with io.open(path, 'r', encoding="utf-8") as file:
             for line in file:
                 r = line.strip()
                 rules_result.append(Rule.from_string(r))
@@ -487,14 +514,18 @@ def get_add_rule_layout():
     layout = [
         [sg.Text('New Rule', justification="center", text_color="darkblue", size=(None, 2), font=("", 22, "bold"))],
 
-        [sg.Text("Select the source for your rule:")],
+        [sg.Text("Select the source Channel:")],
         [sg.Combo(chats_desc, key="source")],
 
-        [sg.Text("Select the destination for your rule:")],
+        [sg.Text("Select the destination Channel:")],
         [sg.Combo(chats_desc, key="destination")],
 
-        [sg.Text("Add some filtering keywords separated with comma:")],
-        [sg.InputText(key="keywords")],
+        [sg.Text("Add some filtering keywords for messages (separated with comma):")],
+        [sg.InputText(key="keywords", size=(50, 1), tooltip="es: music,europe,politics")],
+
+        [sg.Text("Insert GPT prompt for text modification (optional):")],
+        [sg.Multiline(key="gpt", size=(50, 5), tooltip="es. Change text header and insert my signature")],
+        [],
         [sg.HorizontalSeparator()],
         [sg.Button('Save Rule', key="save_rule", size=(12, 1)),
          sg.Button('Close', button_color=("white", "red"), key="close", size=(12, 1))]
@@ -512,7 +543,8 @@ def get_main_layout():
 
     rules_layout = [
         [
-            sg.Listbox(rules_string, select_mode='extended', key='rules_list', background_color="white", size=(60, 15))
+            sg.Listbox(rules_string, select_mode='extended', key='rules_list', background_color="white",
+                       highlight_background_color="blue", size=(60, 15))
         ]
     ]
 
@@ -520,7 +552,9 @@ def get_main_layout():
         [
             sg.Button('Add Rule', key="add_rule", size=(12, 1), ),
             sg.Button('Remove Rule', key="remove_rule", size=(12, 1)),
-            sg.Button('Log Out', key="logout", size=(12, 1), button_color=('white', 'red'), pad=((130, 0), (0, 0)))
+            sg.Button('Download Rules', key="download_rules", size=(12, 1), ),
+            sg.Button('Upload Rules', key="upload_rules", size=(12, 1)),
+            # sg.Button('Log Out', key="logout", size=(12, 1), button_color=('white', 'red'), pad=((130, 0), (0, 0)))
         ],
     ]
 
@@ -635,15 +669,29 @@ def bind_main_UI(telegram_process):
                     dump_rules_to_file(rules_list)
                     main_win['rules_list'].Update(list(map(lambda x: x.rule_to_string(), rules_list)))
 
+                if event == "download_rules":
+                    file_chosen = sg.popup_get_file('Save as: ', save_as=True, no_window=True)
+                    if file_chosen:
+                        dump_rules_to_file(rules_list, file_chosen + ".txt")
+
+                if event == "upload_rules":
+                    file_chosen = sg.popup_get_file('', no_window=True)
+                    if file_chosen:
+                        print(file_chosen)
+                        get_rules_from_file(file_chosen)
+
             # Add rule window
             if window == ADD_WIN:
                 if event in (sg.WIN_CLOSED, 'close'):
                     window.close()
 
                 if event == "save_rule":
-                    key_list = values['keywords'].strip().split(',')
+                    kwywords = [] if values['keywords'].strip() == "" else values['keywords'].strip().split(',')
+                    source_channel = values['source'].split()[0]
                     dest_list = [values['destination'].strip().split()[0]]
-                    new_r = Rule(values['source'].split()[0], dest_list, key_list)
+                    prompt = values['gpt']
+
+                    new_r = Rule(source_channel, dest_list, keywords=kwywords, prompt_gpt=prompt)
                     rules_list.append(new_r)
                     logging.info("Added new rule: " + new_r.rule_to_string())
                     dump_rules_to_file(rules_list)
