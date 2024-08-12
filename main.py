@@ -9,11 +9,13 @@ import re
 import time
 from logging.handlers import QueueListener, RotatingFileHandler
 from multiprocessing import freeze_support
+from pprint import pprint
+
 import PySimpleGUI as sg
 from openai import OpenAI
 from telethon import TelegramClient, events
 
-THEME = 'LightBlue'
+THEME = 'BluePurple'
 ADD_WIN = None
 rules_list = []
 
@@ -38,28 +40,28 @@ if not os.path.exists(LOG_PATH):
 
 
 class Rule:
-    def __init__(self, form_id, to_ids=None, prompt_gpt="", keywords=None):
+    def __init__(self, rule_id, form_id, to_id, prompt_gpt="", keywords=None):
+        self.rule_id = rule_id
         self.from_id = int(form_id)
-        self.to_ids = [] if to_ids is None else to_ids
+        self.to_id = int(to_id)
         self.keywords = [] if keywords is None else keywords
         self.prompt_gpt = prompt_gpt
 
     @classmethod
-    def from_string(cls, string_rule):
+    def from_string(cls, index, string_rule):
         split_str = string_rule.split('->')
-        to_list = None
+        from_id = split_str[0]
+        to_id = split_str[1]
         keys_list = None
         prompt = None
-        if len(split_str) > 1:
-            to_list = list(map(lambda x: x.strip(), split_str[1].split(",")))
         if len(split_str) > 2 and split_str[2].strip() != "":
             keys_list = list(map(lambda x: x.strip(), split_str[2].split(",")))
         if len(split_str) > 3 and split_str[3].strip() != "":
             prompt = split_str[3].strip()
-        return cls(split_str[0], to_list, prompt_gpt=prompt, keywords=keys_list)
+        return cls(index, from_id, to_id, prompt_gpt=prompt, keywords=keys_list)
 
     def rule_to_string(self):
-        base_str = f"From: {self.from_id} To: {','.join(self.to_ids)}"
+        base_str = f"From: {self.from_id} To: {self.to_id}"
         if len(self.keywords) > 0:
             base_str += f" - Filter: {','.join(self.keywords)}"
         if self.prompt_gpt != "":
@@ -68,7 +70,7 @@ class Rule:
         return base_str
 
     def rule_to_file(self):
-        return f"{self.from_id}->{','.join(self.to_ids)}->{','.join(self.keywords)}->{self.prompt_gpt}"
+        return f"{self.from_id}->{self.to_id}->{','.join(self.keywords)}->{self.prompt_gpt}"
 
 
 def logger_init():
@@ -115,18 +117,6 @@ def get_username():
 
 def get_user_id():
     return user_id
-
-
-def rows_from_channel_list(c_list):
-    out = []
-    for row in c_list:
-        out_str = ""
-        if c_list[row]['id'] != '':
-            out_str += f"{c_list[row]['id']}"
-        if c_list[row]['title'] != '':
-            out_str += f" -- {c_list[row]['title']}"
-        out.append((out_str, c_list[row]['active'], c_list[row]['id']))
-    return out
 
 
 def get_all_channels():
@@ -272,7 +262,7 @@ async def start_telegram_loop(uid):
             if is_rule:
                 msg = event.message
                 for r in rules:
-                    to_chat = int(r.to_ids[0])
+                    to_chat = int(r.to_id)
 
                     if find_keyword_in_msg(r, msg.text):
                         if r.prompt_gpt != "":
@@ -329,6 +319,7 @@ async def check_telegram_user_state():
     client = TelegramClient(BASE_PATH + "tc_session", api_id, api_hash, loop=loop)
     await client.connect()
     me = await client.get_me()
+    pprint(me.photo)
     if me is not None:
         username = str(me.username)
         user_id = str(me.id)
@@ -481,9 +472,9 @@ def get_rules_from_file(path=None):
 
     try:
         with io.open(path, 'r', encoding="utf-8") as file:
-            for line in file:
+            for i, line in enumerate(file):
                 r = line.strip()
-                rules_result.append(Rule.from_string(r))
+                rules_result.append(Rule.from_string(i, r))
         return rules_result
     except Exception as e:
         logging.exception(e)
@@ -497,76 +488,93 @@ def get_rows_from_channel_list(c_list):
         if c_list[row]['id'] != '':
             out_str += f"{c_list[row]['id']}"
         if c_list[row]['title'] != '':
-            out_str += f" -- {c_list[row]['title']}"
-        out.append((out_str, c_list[row]['active'], c_list[row]['id']))
+            out_str += f" - {c_list[row]['title']}"
+        out.append(out_str)
     return out
 
 
-def create_channel_item(text, checked, box_id):
-    return [sg.CBox(f'{text}', default=checked, key=box_id)]
+def get_selected_row_from_channel_list(c_list, c_id):
+    for row in c_list:
+        if int(c_list[row]['id']) == c_id:
+            return f"{c_list[row]['id']} - {c_list[row]['title']}"
+    return ""
 
 
-def get_add_rule_layout():
-    chats = rows_from_channel_list(get_all_channels())
-
-    chats_desc = list(map(lambda x: x[0], chats))
-
+def item_row(item_num, chats):
     layout = [
-        [sg.Text('New Rule', justification="center", text_color="darkblue", size=(None, 2), font=("", 22, "bold"))],
-
-        [sg.Text("Select the source Channel:")],
-        [sg.Combo(chats_desc, key="source")],
-
-        [sg.Text("Select the destination Channel:")],
-        [sg.Combo(chats_desc, key="destination")],
-
-        [sg.Text("Add some filtering keywords for messages (separated with comma):")],
-        [sg.InputText(key="keywords", size=(50, 1), tooltip="es: music,europe,politics")],
-
-        [sg.Text("Insert GPT prompt for text modification (optional):")],
-        [sg.Multiline(key="gpt", size=(50, 5), tooltip="es. Change text header and insert my signature")],
-        [],
-        [sg.HorizontalSeparator()],
-        [sg.Button('Save Rule', key="save_rule", size=(12, 1)),
-         sg.Button('Close', button_color=("white", "red"), key="close", size=(12, 1))]
+        [
+            sg.B('❌', button_color=(sg.theme_text_color(), sg.theme_background_color()), enable_events=True,
+                 k=('-DEL-', item_num), tooltip='Delete Rule'),
+            sg.B('✏️', button_color=(sg.theme_text_color(), sg.theme_background_color()), enable_events=True,
+                 k=('edit', item_num), tooltip='Edit Rule'),
+            sg.B('✅', button_color=(sg.theme_text_color(), sg.theme_background_color()), enable_events=True,
+                 k=('save', item_num), tooltip='Save Changes')
+        ],
+        [
+            sg.Text(f'Source: ', k=('source', item_num), size=(15, 1)),
+            sg.Combo(chats, size=(35, 1), k=('source_in', item_num)),
+        ],
+        [
+            sg.Text(f'Destination: ', k=('destination', item_num), size=(15, 1)),
+            sg.Combo(chats, size=(35, 1), k=('destination_in', item_num)),
+        ],
+        [
+            sg.Text(f'Filter Words: ', k=('filter', item_num), size=(15, 1)),
+            sg.Input(size=(35, 1), k=('filter_in', item_num)),
+        ],
+        [
+            sg.Text(f'GPT Modification: ', k=('gpt', item_num), size=(15, 1)),
+            sg.Multiline(size=(35, 3), k=('gpt_in', item_num)),
+        ]
     ]
-    return layout
 
+    framed_layout = [[sg.Frame("", layout)]]
+    row = [sg.pin(sg.Col(framed_layout, k=('-ROW-', item_num)))]
+    return row
+
+
+def change_mod_rule(w, num_rule, disable=False):
+    w[('source_in', num_rule)].update(disabled=disable)
+    w[('destination_in', num_rule)].update(disabled=disable)
+    w[('filter_in', num_rule)].update(disabled=disable)
+    w[('gpt_in', num_rule)].update(disabled=disable)
+
+
+# Frame Based dashboard
 
 def get_main_layout():
-    global rules_list
-    rules_string = list(map(lambda x: x.rule_to_string(), rules_list))
+    channels = get_rows_from_channel_list(get_all_channels())
+
     header = [
         [sg.Text('Forward Rules', justification="center", text_color="darkblue", size=(None, 2),
                  font=("", 22, "bold"))],
     ]
 
-    rules_layout = [
-        [
-            sg.Listbox(rules_string, select_mode='extended', key='rules_list', background_color="white",
-                       highlight_background_color="blue", size=(60, 15))
-        ]
-    ]
-
     buttons = [
         [
-            sg.Button('Add Rule', key="add_rule", size=(12, 1), ),
-            sg.Button('Remove Rule', key="remove_rule", size=(12, 1)),
-            sg.Button('Download Rules', key="download_rules", size=(12, 1), ),
-            sg.Button('Upload Rules', key="upload_rules", size=(12, 1)),
-            # sg.Button('Log Out', key="logout", size=(12, 1), button_color=('white', 'red'), pad=((130, 0), (0, 0)))
+            sg.Button('New Rule', key=("add_rule", 0), size=(12, 1), ),
+            sg.Button('Download Rules', key=("download_rules", 0), size=(12, 1), ),
+            sg.Button('Upload Rules', key=("upload_rules", 0), size=(12, 1)),
+            sg.Button('Log Out', key=("logout", 0), size=(12, 1), button_color=('white', 'red')),
         ],
     ]
 
     left_side = [
         [sg.Image('utils_files\\logoFS.png', key='-PICTUREFRAME-', size=(150, 100), pad=((10, 10), (160, 0)))],
-        [sg.Text("Connected as " + get_username(), text_color="green", size=(25, 1), pad=((0, 0), (100, 0)))],
+        [sg.Text("Connected as ", text_color="green", size=(25, 1))],
+        [sg.Text(get_username(), text_color="green", size=(25, 1))],
     ]
 
     right_side = [
         [sg.Column(header)],
-        [sg.Column(rules_layout)],
-        [sg.Column(buttons, pad=((0, 0), (10, 0)))],
+        [sg.Column([],
+                   scrollable=True,
+                   vertical_scroll_only=True,
+                   k='-RULE SECTION-',
+                   size=(450, 380),
+                   expand_y=True
+                   )],
+        [sg.Column(buttons, pad=((0, 0), (30, 0)))],
     ]
 
     layout = [
@@ -612,6 +620,25 @@ def get_auth_layout():
     return layout
 
 
+def upsert_rule(new_r: Rule):
+    for r in rules_list:
+        if r.rule_id == new_r.rule_id:
+            r.from_id = new_r.from_id
+            r.to_id = new_r.to_id
+            r.keywords = new_r.keywords
+            r.prompt_gpt = new_r.prompt_gpt
+            return
+    # if not found
+    rules_list.append(new_r)
+
+
+def remove_rule(r_id):
+    for r in rules_list:
+        if r.rule_id == r_id:
+            rules_list.remove(r)
+            break
+
+
 def bind_main_UI(telegram_process):
     global rules_list, ADD_WIN
 
@@ -622,8 +649,20 @@ def bind_main_UI(telegram_process):
     main_win = sg.Window('Telegram Forward',
                          get_main_layout(),
                          icon='utils_files\\logoFS.ico',
-                         finalize=True
+                         finalize=True,
+                         metadata=0,
                          )
+    for r in rules_list:
+        main_win.metadata = max(main_win.metadata, r.rule_id)
+
+        channels = get_rows_from_channel_list(get_all_channels())
+        main_win.extend_layout(main_win['-RULE SECTION-'], [item_row(r.rule_id, channels)])
+        main_win[('source_in', r.rule_id)].update(get_selected_row_from_channel_list(get_all_channels(), r.from_id))
+        main_win[('destination_in', r.rule_id)].update(get_selected_row_from_channel_list(get_all_channels(), r.to_id))
+        main_win[('filter_in', r.rule_id)].update(",".join(r.keywords))
+        main_win[('gpt_in', r.rule_id)].update(r.prompt_gpt)
+        change_mod_rule(main_win, r.rule_id, disable=True)
+
     logging.info("Binding Main UI...")
     try:
         while True:
@@ -641,7 +680,7 @@ def bind_main_UI(telegram_process):
                         logging.info("Killing telegram Process...")
                     break
 
-                if event in 'logout':
+                if event[0] == 'logout':
                     logging.info("Logout button pressed...")
                     running_process.terminate()
                     while running_process.is_alive():
@@ -651,52 +690,46 @@ def bind_main_UI(telegram_process):
                     logout_flag = True
                     break
 
-                if event == "add_rule":
-                    ADD_WIN = sg.Window('Telegram Forward',
-                                        get_add_rule_layout(),
-                                        icon='utils_files\\logoFS.ico',
-                                        finalize=True
-                                        )
+                if event[0] == "add_rule":
+                    window.metadata += 1
+                    channels = get_rows_from_channel_list(get_all_channels())
+                    window.extend_layout(window['-RULE SECTION-'], [item_row(window.metadata, channels)])
+                    window['-RULE SECTION-'].contents_changed()
 
-                if event == "remove_rule":
-                    rules_string = list(map(lambda x: x.rule_to_string(), rules_list))
-
-                    for elem in values['rules_list']:
-                        index = rules_string.index(elem)
-                        rules_list.pop(index)
-                        logging.info("Removed rule: " + elem)
-
+                elif event[0] == '-DEL-':
+                    window[('-ROW-', event[1])].update(visible=False)
+                    remove_rule(event[1])
                     dump_rules_to_file(rules_list)
-                    main_win['rules_list'].Update(list(map(lambda x: x.rule_to_string(), rules_list)))
+                    window['-RULE SECTION-'].contents_changed()
 
-                if event == "download_rules":
+                elif event[0] == 'edit':
+                    change_mod_rule(window, event[1], disable=False)
+
+                elif event[0] == 'save':
+                    if values[('source_in', event[1])] == "" or values[('destination_in', event[1])] == "":
+                        sg.popup("Warning: source and destination should not be  empty!")
+                    else:
+                        change_mod_rule(window, event[1], disable=True)
+                        keywords = [] if values[('filter_in', event[1])].strip() == "" else values[
+                            ('filter_in', event[1])].strip().split(',')
+                        source_channel = values[('source_in', event[1])].split()[0]
+                        dest_channel = values[('destination_in', event[1])].split()[0]
+                        prompt = values[('gpt_in', event[1])]
+
+                        new_r = Rule(event[1], source_channel, dest_channel, keywords=keywords, prompt_gpt=prompt)
+                        upsert_rule(new_r)
+                        logging.info("Added new rule: " + new_r.rule_to_string())
+                        dump_rules_to_file(rules_list)
+
+                if event[0] == "download_rules":
                     file_chosen = sg.popup_get_file('Save as: ', save_as=True, no_window=True)
                     if file_chosen:
                         dump_rules_to_file(rules_list, file_chosen + ".txt")
 
-                if event == "upload_rules":
+                if event[0] == "upload_rules":
                     file_chosen = sg.popup_get_file('', no_window=True)
                     if file_chosen:
-                        print(file_chosen)
-                        get_rules_from_file(file_chosen)
-
-            # Add rule window
-            if window == ADD_WIN:
-                if event in (sg.WIN_CLOSED, 'close'):
-                    window.close()
-
-                if event == "save_rule":
-                    kwywords = [] if values['keywords'].strip() == "" else values['keywords'].strip().split(',')
-                    source_channel = values['source'].split()[0]
-                    dest_list = [values['destination'].strip().split()[0]]
-                    prompt = values['gpt']
-
-                    new_r = Rule(source_channel, dest_list, keywords=kwywords, prompt_gpt=prompt)
-                    rules_list.append(new_r)
-                    logging.info("Added new rule: " + new_r.rule_to_string())
-                    dump_rules_to_file(rules_list)
-                    main_win['rules_list'].Update(list(map(lambda x: x.rule_to_string(), rules_list)))
-                    window.close()
+                        rules_list = get_rules_from_file(file_chosen)
 
         if logout_flag:
             os.remove(BASE_PATH + "tc_session.session")
@@ -716,9 +749,18 @@ def bind_auth_UI():
     hash_code = ""
     start = False
     try:  # Client already Logged IN
+
         if check_status_start_thread():
-            # sg.theme_previewer()
             logging.warning("Already logged in...")
+
+            # Protezione
+            if username != "valentino_dicianni":
+                sg.Popup('Error!', 'Account not allowed.')
+                os.remove(BASE_PATH + "tc_session.session")
+                if os.path.exists(BASE_PATH + "tc_session.session-journal"):
+                    os.remove(BASE_PATH + "tc_session.session-journal")
+                return False
+
             res = get_channels_start_thread()
             if res != ERROR:
                 proc = telegram_loop_start_process()
