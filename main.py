@@ -789,7 +789,7 @@ def bind_auth_UI():
             logging.warning("Already logged in...")
 
             # Protezione
-            if username != "valentino_dicianni":
+            if username != "valentino_dicianni" and username != "Michjr17" and username != "ChrBosco":
                 sg.Popup('Error!', 'Account not allowed.',
                          icon=resource_path('logoFS.ico'))
                 os.remove(BASE_PATH + "tf_session.session")
