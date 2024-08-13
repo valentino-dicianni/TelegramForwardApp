@@ -5,17 +5,18 @@ import io
 import logging
 import multiprocessing
 import os
-import re
 import time
 from logging.handlers import QueueListener, RotatingFileHandler
 from multiprocessing import freeze_support
-from pprint import pprint
 
 import PySimpleGUI as sg
+from PIL import Image, ImageDraw
 from openai import OpenAI
 from telethon import TelegramClient, events
 
-THEME = 'BluePurple'
+# THEME = 'SystemDefault1'
+THEME = 'LightGray3'
+
 ADD_WIN = None
 rules_list = []
 
@@ -28,6 +29,7 @@ api_id = 1271225
 api_hash = 'f36c296645a468c16a698ecb1e59e31b'
 username = ""
 user_id = ""
+profile_photo_path = BASE_PATH + "profile_photo.png"
 
 client = OpenAI(
     api_key="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",
@@ -75,7 +77,7 @@ class Rule:
 
 def logger_init():
     queue = multiprocessing.Queue()
-    filename = datetime.datetime.now().strftime(f'{LOG_PATH}TClog_%d_%m_%Y.log')
+    filename = datetime.datetime.now().strftime(f'{LOG_PATH}TFlog_%d_%m_%Y.log')
     file_handler = RotatingFileHandler(filename, maxBytes=1048576, backupCount=5)
     console_handler = logging.StreamHandler()
 
@@ -182,7 +184,7 @@ async def get_channels_from_telegram():
     channels = []
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    client = TelegramClient(BASE_PATH + "tc_session", api_id, api_hash, loop=loop)
+    client = TelegramClient(BASE_PATH + "tf_session", api_id, api_hash, loop=loop)
     try:
         logging.info("Telegram Client started Getting Channels...")
 
@@ -245,7 +247,7 @@ async def start_telegram_loop(uid):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    client = TelegramClient(BASE_PATH + "tc_session", api_id, api_hash, loop=loop)
+    client = TelegramClient(BASE_PATH + "tf_session", api_id, api_hash, loop=loop)
     await client.connect()
     me = await client.get_me()
 
@@ -287,7 +289,7 @@ async def start_telegram_loop(uid):
 async def send_telegram_verification_code(cell_num):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    client = TelegramClient(BASE_PATH + "tc_session", api_id, api_hash, loop=loop)
+    client = TelegramClient(BASE_PATH + "tf_session", api_id, api_hash, loop=loop)
     try:
         logging.info("Telegram Client started Verification Code...")
         await client.connect()
@@ -306,6 +308,27 @@ async def send_telegram_verification_code(cell_num):
         return ERROR
 
 
+def create_rounded_image(input_image_path, output_image_path, final_size=(40, 40)):
+    with Image.open(input_image_path) as img:
+        larger_size = (final_size[0] * 2, final_size[1] * 2)
+        img = img.resize(larger_size, Image.Resampling.LANCZOS)
+
+        # Crea una maschera circolare
+        mask = Image.new('L', larger_size, 0)
+        draw = ImageDraw.Draw(mask)
+        draw.ellipse((0, 0, larger_size[0], larger_size[1]), fill=255)
+
+        # Applica la maschera all'immagine
+        circular_image = Image.new('RGBA', larger_size)
+        circular_image.paste(img, (0, 0), mask)
+
+        # Ridimensiona l'immagine circolare alla dimensione finale
+        circular_image = circular_image.resize(final_size, Image.Resampling.LANCZOS)
+
+        # Salva l'immagine risultante
+        circular_image.save(output_image_path, 'PNG', quality=100)
+
+
 async def check_telegram_user_state():
     """
     Check if the user is logged in
@@ -316,13 +339,16 @@ async def check_telegram_user_state():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    client = TelegramClient(BASE_PATH + "tc_session", api_id, api_hash, loop=loop)
+    client = TelegramClient(BASE_PATH + "tf_session", api_id, api_hash, loop=loop)
     await client.connect()
     me = await client.get_me()
-    pprint(me.photo)
+
     if me is not None:
         username = str(me.username)
         user_id = str(me.id)
+        user_photo = await client.download_profile_photo('me')
+        create_rounded_image(user_photo, profile_photo_path)
+        os.remove(user_photo)
 
     if await client.is_user_authorized():
         await client.disconnect()
@@ -341,7 +367,7 @@ async def telegram_sign_in(phone_number, verification_code, hash_code):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     global username, user_id
-    client = TelegramClient(BASE_PATH + "tc_session", api_id, api_hash, loop=loop)
+    client = TelegramClient(BASE_PATH + "tf_session", api_id, api_hash, loop=loop)
     try:
         await client.connect()
         res = await client.sign_in(phone_number, verification_code, phone_code_hash=hash_code)
@@ -507,7 +533,7 @@ def item_row(item_num, chats):
                  k=('-DEL-', item_num), tooltip='Delete Rule'),
             sg.B('✏️', button_color=(sg.theme_text_color(), sg.theme_background_color()), enable_events=True,
                  k=('edit', item_num), tooltip='Edit Rule'),
-            sg.B('✅', button_color=(sg.theme_text_color(), sg.theme_background_color()), enable_events=True,
+            sg.B('✔️', button_color=(sg.theme_text_color(), sg.theme_background_color()), enable_events=True,
                  k=('save', item_num), tooltip='Save Changes')
         ],
         [
@@ -543,26 +569,22 @@ def change_mod_rule(w, num_rule, disable=False):
 # Frame Based dashboard
 
 def get_main_layout():
-    channels = get_rows_from_channel_list(get_all_channels())
-
     header = [
-        [sg.Text('Forward Rules', justification="center", text_color="darkblue", size=(None, 2),
-                 font=("", 22, "bold"))],
-    ]
-
-    buttons = [
-        [
-            sg.Button('New Rule', key=("add_rule", 0), size=(12, 1), ),
-            sg.Button('Download Rules', key=("download_rules", 0), size=(12, 1), ),
-            sg.Button('Upload Rules', key=("upload_rules", 0), size=(12, 1)),
-            sg.Button('Log Out', key=("logout", 0), size=(12, 1), button_color=('white', 'red')),
-        ],
+        [sg.Text('Forward Rules', justification="center", text_color="darkblue", font=("", 22, "bold"))],
     ]
 
     left_side = [
-        [sg.Image('utils_files\\logoFS.png', key='-PICTUREFRAME-', size=(150, 100), pad=((10, 10), (160, 0)))],
-        [sg.Text("Connected as ", text_color="green", size=(25, 1))],
-        [sg.Text(get_username(), text_color="green", size=(25, 1))],
+        [sg.Image(source='utils_files\\logoFS.png', key='-PICTUREFRAME-', size=(150, 150), pad=(0, 30))],
+
+        [sg.Button('➕   New Rule', key=("add_rule", 0), size=(20, 1), )],
+        [sg.Button('⬇️   Download', key=("download_rules", 0), size=(20, 1), )],
+        [sg.Button('⬆️     Upload  ', key=("upload_rules", 0), size=(20, 1))],
+        [sg.Button('↪️    Log Out ', key=("logout", 0), size=(20, 1), button_color=('white', 'maroon'))],
+
+        [
+            sg.Image(source=profile_photo_path, key='-PICTUREFRAME-', pad=((0, 0), (40, 10))),
+            sg.Text(f"Connected as:\n{get_username()}", text_color="green", pad=((10, 0), (40, 10)))
+        ],
     ]
 
     right_side = [
@@ -572,16 +594,17 @@ def get_main_layout():
                    vertical_scroll_only=True,
                    k='-RULE SECTION-',
                    size=(450, 380),
-                   expand_y=True
+                   expand_y=True,
+                   pad=(10, 0),
+                   vertical_alignment='top'
                    )],
-        [sg.Column(buttons, pad=((0, 0), (30, 0)))],
     ]
 
     layout = [
         [
-            sg.Column(left_side, key="image"),
+            sg.Column(left_side, key="image", vertical_alignment='bottom', element_justification='center'),
             sg.VerticalSeparator(),
-            sg.Column(right_side, visible=True, key='buttons'),
+            sg.Column(right_side, visible=True, key='buttons', vertical_alignment='bottom'),
         ],
     ]
 
@@ -590,31 +613,29 @@ def get_main_layout():
 
 def get_auth_layout():
     file_list_column = [
-        [sg.Image('utils_files\\logoFS.png', key='-PICTUREFRAME2-', size=(150, 100), pad=(150, 40))],
+        [sg.Image('utils_files\\logoFS.png', key='-PICTUREFRAME2-', size=(150, 150), pad=((0, 0), (0, 30)))],
         [
-            sg.Text('Phone Number:', key="phoneText", size=(20, 1), pad=((40, 0), (0, 0))),
-            sg.InputText("+39", key='inputNumber', size=(30, 1)),
+            sg.Text('Phone Number:', key="phoneText", size=(20, 1)),
+            sg.InputText("+39", key='inputNumber', size=(20, 1)),
         ],
         [
-            sg.Text('Verification Code:', key="codeText", size=(20, 1), pad=((40, 0), (0, 0)), visible=True),
-            sg.InputText(key='codeInput', size=(30, 1), disabled=True),
+            sg.Text('Verification Code:', key="codeText", size=(20, 1), visible=True),
+            sg.InputText(key='codeInput', size=(20, 1), disabled=True),
         ],
 
         [
-            sg.Button('Get Code', key='codeBtn', size=(8, 1), pad=((150, 0), (50, 0))),
-            sg.Button('Log In', key='loginBtn', size=(8, 1), pad=((8, 0), (50, 0)), disabled=True),
-
+            sg.Button('Get Code', key='codeBtn', size=(8, 1), pad=(5, (20, 5))),
+            sg.Button('Log In', key='loginBtn', size=(8, 1), pad=(5, (20, 5)), disabled=True),
         ],
         [
-            sg.Button('Exit', size=(8, 1), pad=((190, 0), (20, 0))),
+            sg.Button('Exit', size=(8, 1)),
             sg.Text(text="ERROR: wrong number", key='ERROR', size=(20, 1), visible=False, text_color='Red')
         ]
     ]
 
     layout = [
         [
-
-            sg.Column(file_list_column),
+            sg.Column(file_list_column, vertical_alignment='top', element_justification='center'),
         ],
     ]
     return layout
@@ -694,6 +715,7 @@ def bind_main_UI(telegram_process):
                     window.metadata += 1
                     channels = get_rows_from_channel_list(get_all_channels())
                     window.extend_layout(window['-RULE SECTION-'], [item_row(window.metadata, channels)])
+                    window.visibility_changed()
                     window['-RULE SECTION-'].contents_changed()
 
                 elif event[0] == '-DEL-':
@@ -707,7 +729,9 @@ def bind_main_UI(telegram_process):
 
                 elif event[0] == 'save':
                     if values[('source_in', event[1])] == "" or values[('destination_in', event[1])] == "":
-                        sg.popup("Warning: source and destination should not be  empty!")
+                        sg.popup("Warning: source and destination should not be  empty!",
+                                 icon='utils_files\\logoFS.ico'
+                                 )
                     else:
                         change_mod_rule(window, event[1], disable=True)
                         keywords = [] if values[('filter_in', event[1])].strip() == "" else values[
@@ -722,19 +746,21 @@ def bind_main_UI(telegram_process):
                         dump_rules_to_file(rules_list)
 
                 if event[0] == "download_rules":
-                    file_chosen = sg.popup_get_file('Save as: ', save_as=True, no_window=True)
+                    file_chosen = sg.popup_get_file('Save as: ', save_as=True, no_window=True,
+                                                    icon='utils_files\\logoFS.ico')
                     if file_chosen:
                         dump_rules_to_file(rules_list, file_chosen + ".txt")
 
                 if event[0] == "upload_rules":
-                    file_chosen = sg.popup_get_file('', no_window=True)
+                    file_chosen = sg.popup_get_file('', no_window=True,
+                                                    icon='utils_files\\logoFS.ico')
                     if file_chosen:
                         rules_list = get_rules_from_file(file_chosen)
 
         if logout_flag:
-            os.remove(BASE_PATH + "tc_session.session")
-            if os.path.exists(BASE_PATH + "tc_session.session-journal"):
-                os.remove(BASE_PATH + "tc_session.session-journal")
+            os.remove(BASE_PATH + "tf_session.session")
+            if os.path.exists(BASE_PATH + "tf_session.session-journal"):
+                os.remove(BASE_PATH + "tf_session.session-journal")
             window.close()
             logging.info("Session files deleted, starting bindUI...")
             bind_auth_UI()
@@ -755,10 +781,11 @@ def bind_auth_UI():
 
             # Protezione
             if username != "valentino_dicianni":
-                sg.Popup('Error!', 'Account not allowed.')
-                os.remove(BASE_PATH + "tc_session.session")
-                if os.path.exists(BASE_PATH + "tc_session.session-journal"):
-                    os.remove(BASE_PATH + "tc_session.session-journal")
+                sg.Popup('Error!', 'Account not allowed.',
+                         icon='utils_files\\logoFS.ico')
+                os.remove(BASE_PATH + "tf_session.session")
+                if os.path.exists(BASE_PATH + "tf_session.session-journal"):
+                    os.remove(BASE_PATH + "tf_session.session-journal")
                 return False
 
             res = get_channels_start_thread()
@@ -770,8 +797,9 @@ def bind_auth_UI():
             sg.theme(THEME)
             # sg.theme_previewer()
             logging.warning("Not logged in...")
-            window = sg.Window('Telegram Copier - Authentication', get_auth_layout(), icon='utils_files\\logoFS.ico',
-                               finalize=True, size=(500, 400))
+            window = sg.Window('Telegram Copier - Authentication', get_auth_layout(),
+                               icon='utils_files\\logoFS.ico',
+                               finalize=True)
             while True:
                 event, values = window.read(timeout=100)
                 if event in (sg.WIN_CLOSED, 'Exit'):
@@ -788,7 +816,8 @@ def bind_auth_UI():
                             window.Element('codeInput').Update(disabled=False)
                             window.Element('loginBtn').Update(disabled=False)
                         else:
-                            sg.Popup('Error!', 'Wrong number.')
+                            sg.Popup('Error!', 'Wrong number.',
+                                     icon='utils_files\\logoFS.ico')
 
                 if event in 'loginBtn':
                     if not start:
@@ -798,9 +827,11 @@ def bind_auth_UI():
                             start = True
                             break
                         else:
-                            sg.Popup('Error!', 'Wrong validation code.')
+                            sg.Popup('Error!', 'Wrong validation code.',
+                                     icon='utils_files\\logoFS.ico')
                     else:
-                        sg.Popup('Error!', 'Reload app.')
+                        sg.Popup('Error!', 'Reload app.',
+                                 icon='utils_files\\logoFS.ico')
 
             if start:
                 res = get_channels_start_thread()
@@ -809,7 +840,8 @@ def bind_auth_UI():
                     window.close()
                     bind_main_UI(proc)
                 else:
-                    sg.Popup('Error!', 'Fetching Channels. Please Exit and retry.')
+                    sg.Popup('Error!', 'Fetching Channels. Please Exit and retry.',
+                             icon='utils_files\\logoFS.ico')
                     window.close()
                     logging.error("ERROR FETCHING CHANNELS")
 
