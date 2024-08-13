@@ -5,6 +5,7 @@ import io
 import logging
 import multiprocessing
 import os
+import sys
 import time
 from logging.handlers import QueueListener, RotatingFileHandler
 from multiprocessing import freeze_support
@@ -96,6 +97,14 @@ def logger_init():
 
 
 q_listener, q = logger_init()
+
+
+def resource_path(relative_path):
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
 
 
 def list_to_string(l, sep):
@@ -574,7 +583,7 @@ def get_main_layout():
     ]
 
     left_side = [
-        [sg.Image(source='utils_files\\logoFS.png', key='-PICTUREFRAME-', size=(150, 150), pad=(0, 30))],
+        [sg.Image(source=resource_path('logoFS.png'), key='-PICTUREFRAME-', size=(150, 150), pad=(0, 30))],
 
         [sg.Button('➕   New Rule', key=("add_rule", 0), size=(20, 1), )],
         [sg.Button('⬇️   Download', key=("download_rules", 0), size=(20, 1), )],
@@ -613,7 +622,7 @@ def get_main_layout():
 
 def get_auth_layout():
     file_list_column = [
-        [sg.Image('utils_files\\logoFS.png', key='-PICTUREFRAME2-', size=(150, 150), pad=((0, 0), (0, 30)))],
+        [sg.Image(resource_path('logoFS.png'), key='-PICTUREFRAME2-', size=(150, 150), pad=((0, 0), (0, 30)))],
         [
             sg.Text('Phone Number:', key="phoneText", size=(20, 1)),
             sg.InputText("+39", key='inputNumber', size=(20, 1)),
@@ -669,7 +678,7 @@ def bind_main_UI(telegram_process):
     sg.theme(THEME)
     main_win = sg.Window('Telegram Forward',
                          get_main_layout(),
-                         icon='utils_files\\logoFS.ico',
+                         icon=resource_path('logoFS.ico'),
                          finalize=True,
                          metadata=0,
                          )
@@ -730,7 +739,7 @@ def bind_main_UI(telegram_process):
                 elif event[0] == 'save':
                     if values[('source_in', event[1])] == "" or values[('destination_in', event[1])] == "":
                         sg.popup("Warning: source and destination should not be  empty!",
-                                 icon='utils_files\\logoFS.ico'
+                                 icon=resource_path('logoFS.ico')
                                  )
                     else:
                         change_mod_rule(window, event[1], disable=True)
@@ -747,13 +756,13 @@ def bind_main_UI(telegram_process):
 
                 if event[0] == "download_rules":
                     file_chosen = sg.popup_get_file('Save as: ', save_as=True, no_window=True,
-                                                    icon='utils_files\\logoFS.ico')
+                                                    icon=resource_path('logoFS.ico'))
                     if file_chosen:
                         dump_rules_to_file(rules_list, file_chosen + ".txt")
 
                 if event[0] == "upload_rules":
                     file_chosen = sg.popup_get_file('', no_window=True,
-                                                    icon='utils_files\\logoFS.ico')
+                                                    icon=resource_path('logoFS.ico'))
                     if file_chosen:
                         rules_list = get_rules_from_file(file_chosen)
 
@@ -782,7 +791,7 @@ def bind_auth_UI():
             # Protezione
             if username != "valentino_dicianni":
                 sg.Popup('Error!', 'Account not allowed.',
-                         icon='utils_files\\logoFS.ico')
+                         icon=resource_path('logoFS.ico'))
                 os.remove(BASE_PATH + "tf_session.session")
                 if os.path.exists(BASE_PATH + "tf_session.session-journal"):
                     os.remove(BASE_PATH + "tf_session.session-journal")
@@ -798,7 +807,7 @@ def bind_auth_UI():
             # sg.theme_previewer()
             logging.warning("Not logged in...")
             window = sg.Window('Telegram Copier - Authentication', get_auth_layout(),
-                               icon='utils_files\\logoFS.ico',
+                               icon=resource_path('logoFS.ico'),
                                finalize=True)
             while True:
                 event, values = window.read(timeout=100)
@@ -817,7 +826,7 @@ def bind_auth_UI():
                             window.Element('loginBtn').Update(disabled=False)
                         else:
                             sg.Popup('Error!', 'Wrong number.',
-                                     icon='utils_files\\logoFS.ico')
+                                     icon=resource_path('logoFS.ico'))
 
                 if event in 'loginBtn':
                     if not start:
@@ -828,10 +837,10 @@ def bind_auth_UI():
                             break
                         else:
                             sg.Popup('Error!', 'Wrong validation code.',
-                                     icon='utils_files\\logoFS.ico')
+                                     icon=resource_path('logoFS.ico'))
                     else:
                         sg.Popup('Error!', 'Reload app.',
-                                 icon='utils_files\\logoFS.ico')
+                                 icon=resource_path('logoFS.ico'))
 
             if start:
                 res = get_channels_start_thread()
@@ -841,7 +850,7 @@ def bind_auth_UI():
                     bind_main_UI(proc)
                 else:
                     sg.Popup('Error!', 'Fetching Channels. Please Exit and retry.',
-                             icon='utils_files\\logoFS.ico')
+                             icon=resource_path('logoFS.ico'))
                     window.close()
                     logging.error("ERROR FETCHING CHANNELS")
 
