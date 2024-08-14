@@ -26,12 +26,14 @@ ERROR = -1
 
 if platform.system() == "Windows":
     BASE_PATH = os.environ['APPDATA'] + "\\TelegramForward\\"
-else:
+    LOG_PATH = BASE_PATH + "Logs\\"
+elif platform.system() == "Linux":
     BASE_PATH = os.path.expanduser("~") + "/.config/TelegramForward/"
+    LOG_PATH = BASE_PATH + "Logs/"
+else:  # Apple
+    BASE_PATH = os.path.expanduser("~") + "/Library/Application Support/TelegramForward/"
+    LOG_PATH = BASE_PATH + "Logs/"
 
-
-
-LOG_PATH = BASE_PATH + "Logs\\"
 RULES_PATH = BASE_PATH + "rules.txt"
 
 api_id = 1271225
