@@ -579,7 +579,7 @@ def change_mod_rule(w, num_rule, disable=False):
 
 def get_main_layout():
     header = [
-        [sg.Text('Forward Rules', justification="center", text_color="darkblue", font=("", 22, "bold"))],
+        [sg.Text('Forward Rules', justification="center", text_color="black", font=("", 20, "bold"))],
     ]
 
     left_side = [
