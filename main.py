@@ -14,6 +14,7 @@ import PySimpleGUI as sg
 from PIL import Image, ImageDraw
 from openai import OpenAI
 from telethon import TelegramClient, events
+import platform
 
 # THEME = 'SystemDefault1'
 THEME = 'LightGray3'
@@ -22,7 +23,14 @@ ADD_WIN = None
 rules_list = []
 
 ERROR = -1
-BASE_PATH = os.environ['APPDATA'] + "\\TelegramForward\\"
+
+if platform.system() == "Windows":
+    BASE_PATH = os.environ['APPDATA'] + "\\TelegramForward\\"
+else:
+    BASE_PATH = os.path.expanduser("~") + "/.config/TelegramForward/"
+
+
+
 LOG_PATH = BASE_PATH + "Logs\\"
 RULES_PATH = BASE_PATH + "rules.txt"
 
