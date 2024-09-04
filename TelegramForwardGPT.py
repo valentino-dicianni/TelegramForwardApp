@@ -15,6 +15,9 @@ from PIL import Image, ImageDraw
 from openai import OpenAI
 from telethon import TelegramClient, events
 import platform
+from cryptography.fernet import Fernet
+import base64
+import ctypes
 
 # THEME = 'SystemDefault1'
 THEME = 'LightGray3'
@@ -50,6 +53,48 @@ if not os.path.exists(BASE_PATH):
     os.makedirs(BASE_PATH)
 if not os.path.exists(LOG_PATH):
     os.makedirs(LOG_PATH)
+
+
+class SecureCounter:
+    def __init__(self, counter_file=BASE_PATH + '.license.dat'):
+        self.counter_file = counter_file
+        self.key = self.generate_key()
+
+    @staticmethod
+    def generate_key():
+        hardcoded_string = 'telegramforwardlicensekeyiscool1'
+        return base64.urlsafe_b64encode(hardcoded_string.encode())
+
+    def save_counter(self, counter):
+        fernet = Fernet(self.key)
+        encrypted_counter = fernet.encrypt(str(counter).encode())
+
+        with open(self.counter_file, 'wb') as f:
+            f.write(encrypted_counter)
+
+        if platform.system() == "Windows":
+            ctypes.windll.kernel32.SetFileAttributesW(self.counter_file, 0x02)
+
+    def load_counter(self):
+        if not os.path.exists(self.counter_file):
+            return 0
+        fernet = Fernet(self.key)
+        with open(self.counter_file, 'rb') as file:
+            encrypted_counter = file.read()
+        try:
+            return int(fernet.decrypt(encrypted_counter).decode())
+        except Exception as e:
+            print(f"Errore durante la decifratura del contatore: {e}")
+            return 0
+
+    def increment_counter(self):
+        counter = self.load_counter()
+        counter += 1
+        self.save_counter(counter)
+        return counter
+
+    def get_counter(self):
+        return self.load_counter()
 
 
 class Rule:
@@ -107,6 +152,7 @@ def logger_init():
 
 
 q_listener, q = logger_init()
+license_counter = SecureCounter()
 
 
 def resource_path(relative_path):
@@ -273,6 +319,7 @@ async def start_telegram_loop(uid):
     @client.on(events.NewMessage(func=lambda e: e.is_channel or e.is_group))
     async def handler(event):
         try:
+            global license_counter
             sender = await event.get_sender()
 
             rules_local = get_rules_from_file()
@@ -290,7 +337,8 @@ async def start_telegram_loop(uid):
                             final_prompt = f"{str(r.prompt_gpt)} '{str(msg.text)}'"
                             logging.info(final_prompt)
                             gpt_res = gpt4_query(final_prompt)
-
+                            current_count = license_counter.increment_counter()  # Incrementa e ottiene il contatore
+                            print(f"Contatore attuale: {current_count}")
                             await client.send_message(to_chat, gpt_res, silent=False)
                         else:
                             await client.send_message(to_chat, msg, silent=False)
@@ -327,7 +375,7 @@ async def send_telegram_verification_code(cell_num):
         return ERROR
 
 
-def create_rounded_image(input_image_path, output_image_path, final_size=(40, 40)):
+async def create_rounded_image(input_image_path, output_image_path, final_size=(40, 40)):
     with Image.open(input_image_path) as img:
         larger_size = (final_size[0] * 2, final_size[1] * 2)
         img = img.resize(larger_size, Image.Resampling.LANCZOS)
@@ -366,7 +414,7 @@ async def check_telegram_user_state():
         username = str(me.username)
         user_id = str(me.id)
         user_photo = await client.download_profile_photo('me')
-        create_rounded_image(user_photo, profile_photo_path)
+        await create_rounded_image(user_photo, profile_photo_path)
         os.remove(user_photo)
 
     if await client.is_user_authorized():
@@ -587,6 +635,16 @@ def change_mod_rule(w, num_rule, disable=False):
 
 # Frame Based dashboard
 
+def get_license_layout():
+    license_layout = [
+        [sg.Text('API KEY', size=(20, 1)), sg.InputText("", size=(80, 1))],
+        [sg.Text('SECRET KEY', size=(20, 1)), sg.InputText("", size=(80, 1))],
+        [sg.HorizontalSeparator()],
+        [sg.Button('Update', key='update'), sg.Button('Close', key='close', button_color=('white', 'firebrick'))],
+    ]
+    return license_layout
+
+
 def get_main_layout():
     header = [
         [sg.Text('Forward Rules', justification="center", text_color="black", font=("", 20, "bold"))],
@@ -598,6 +656,7 @@ def get_main_layout():
         [sg.Button('➕   New Rule', key=("add_rule", 0), size=(20, 1), )],
         [sg.Button('⬇️   Download', key=("download_rules", 0), size=(20, 1), )],
         [sg.Button('⬆️     Upload  ', key=("upload_rules", 0), size=(20, 1))],
+        [sg.Button('🔑    License ', key=("license_key", 0), size=(20, 1))],
         [sg.Button('↪️    Log Out ', key=("logout", 0), size=(20, 1), button_color=('white', 'maroon'))],
 
         [
@@ -608,6 +667,7 @@ def get_main_layout():
 
     right_side = [
         [sg.Column(header)],
+        [sg.Text(f"No forward rules for now. Add a new one to start...", k="-WARNING-", font='* 8 italic')],
         [sg.Column([],
                    scrollable=True,
                    vertical_scroll_only=True,
@@ -693,8 +753,8 @@ def bind_main_UI(telegram_process):
                          metadata=0,
                          )
     for r in rules_list:
+        main_win['-WARNING-'].update(visible=False)
         main_win.metadata = max(main_win.metadata, r.rule_id)
-
         channels = get_rows_from_channel_list(get_all_channels())
         main_win.extend_layout(main_win['-RULE SECTION-'], [item_row(r.rule_id, channels)])
         main_win[('source_in', r.rule_id)].update(get_selected_row_from_channel_list(get_all_channels(), r.from_id))
@@ -731,6 +791,7 @@ def bind_main_UI(telegram_process):
                     break
 
                 if event[0] == "add_rule":
+                    window['-WARNING-'].update(visible=False)
                     window.metadata += 1
                     channels = get_rows_from_channel_list(get_all_channels())
                     window.extend_layout(window['-RULE SECTION-'], [item_row(window.metadata, channels)])
@@ -738,10 +799,14 @@ def bind_main_UI(telegram_process):
                     window['-RULE SECTION-'].contents_changed()
 
                 elif event[0] == '-DEL-':
-                    window[('-ROW-', event[1])].update(visible=False)
-                    remove_rule(event[1])
-                    dump_rules_to_file(rules_list)
-                    window['-RULE SECTION-'].contents_changed()
+                    res = sg.popup_ok_cancel('Warning: Are you sure you want to delete this rule?',
+                                             title='Delete Rule',
+                                             icon=resource_path('logoFS.ico'))
+                    if res == 'OK':
+                        window[('-ROW-', event[1])].update(visible=False)
+                        remove_rule(event[1])
+                        dump_rules_to_file(rules_list)
+                        window['-RULE SECTION-'].contents_changed()
 
                 elif event[0] == 'edit':
                     change_mod_rule(window, event[1], disable=False)
@@ -749,8 +814,7 @@ def bind_main_UI(telegram_process):
                 elif event[0] == 'save':
                     if values[('source_in', event[1])] == "" or values[('destination_in', event[1])] == "":
                         sg.popup("Warning: source and destination should not be  empty!",
-                                 icon=resource_path('logoFS.ico')
-                                 )
+                                 icon=resource_path('logoFS.ico'))
                     else:
                         change_mod_rule(window, event[1], disable=True)
                         keywords = [] if values[('filter_in', event[1])].strip() == "" else values[
@@ -774,7 +838,22 @@ def bind_main_UI(telegram_process):
                     file_chosen = sg.popup_get_file('', no_window=True,
                                                     icon=resource_path('logoFS.ico'))
                     if file_chosen:
-                        rules_list = get_rules_from_file(file_chosen)
+                        rules_file = get_rules_from_file(file_chosen)
+                        channels = get_rows_from_channel_list(get_all_channels())
+
+                        for r in rules_file:
+                            window.metadata += 1
+                            window.extend_layout(window['-RULE SECTION-'], [item_row(window.metadata, channels)])
+                            r.rule_id = window.metadata
+                            upsert_rule(r)
+                            window[('source_in', r.rule_id)].update(value=r.from_id)
+                            window[('destination_in', r.rule_id)].update(value=r.to_id)
+                            window[('filter_in', r.rule_id)].update(value=r.keywords)
+                            window[('gpt_in', r.rule_id)].update(value=r.prompt_gpt)
+                            change_mod_rule(window, r.rule_id, disable=True)
+
+                            window.visibility_changed()
+                            window['-RULE SECTION-'].contents_changed()
 
         if logout_flag:
             os.remove(BASE_PATH + "tf_session.session")
@@ -854,6 +933,7 @@ def bind_auth_UI():
 
             if start:
                 res = get_channels_start_thread()
+                check_status_start_thread()
                 if res != ERROR:
                     proc = telegram_loop_start_process()
                     window.close()
@@ -872,6 +952,8 @@ if __name__ == "__main__":
     freeze_support()
     logging.info("======### SESSION START ###=====")
     logging.info("Building UI...")
+    # import pyi_splash
+    # pyi_splash.close()
     bind_auth_UI()
     logging.info("======### SESSION END ###=====\n")
     q_listener.stop()
