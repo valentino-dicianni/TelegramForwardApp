@@ -9,7 +9,8 @@ import sys
 import time
 from logging.handlers import QueueListener, RotatingFileHandler
 from multiprocessing import freeze_support
-
+import requests
+import json
 import PySimpleGUI as sg
 from PIL import Image, ImageDraw
 from openai import OpenAI
@@ -19,13 +20,25 @@ from cryptography.fernet import Fernet
 import base64
 import ctypes
 
-# THEME = 'SystemDefault1'
 THEME = 'LightGray3'
-
-ADD_WIN = None
-rules_list = []
-
 ERROR = -1
+
+valid_license = False
+rules_list = []
+plans = {
+    "starter": {
+        "model": "gpt-3.5-turbo",
+        "messages": 3000
+    },
+    "pro": {
+        "model": "gpt-3.5-turbo",
+        "messages": 6000
+    },
+    "max": {
+        "model": "gpt-4o",
+        "messages": 9000
+    },
+}
 
 if platform.system() == "Windows":
     BASE_PATH = os.environ['APPDATA'] + "\\TelegramForward\\"
@@ -44,7 +57,7 @@ api_hash = 'f36c296645a468c16a698ecb1e59e31b'
 username = ""
 user_id = ""
 profile_photo_path = BASE_PATH + "profile_photo.png"
-
+main_win = None
 client = OpenAI(
     api_key="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",
 )
@@ -56,9 +69,10 @@ if not os.path.exists(LOG_PATH):
 
 
 class SecureCounter:
-    def __init__(self, counter_file=BASE_PATH + '.license.dat'):
+    def __init__(self, counter_file=BASE_PATH + '.counter.dat'):
         self.counter_file = counter_file
         self.key = self.generate_key()
+        self.counter = 0
 
     @staticmethod
     def generate_key():
@@ -68,12 +82,14 @@ class SecureCounter:
     def save_counter(self, counter):
         fernet = Fernet(self.key)
         encrypted_counter = fernet.encrypt(str(counter).encode())
-
+        os.remove(self.counter_file)
         with open(self.counter_file, 'wb') as f:
             f.write(encrypted_counter)
 
-        if platform.system() == "Windows":
-            ctypes.windll.kernel32.SetFileAttributesW(self.counter_file, 0x02)
+        if os.path.exists(self.counter_file) and platform.system() == "Windows":
+            result = ctypes.windll.kernel32.SetFileAttributesW(self.counter_file, 0x02)
+            if not result:
+                print(f"Errore nell'impostare attributi del file: {ctypes.GetLastError()}")
 
     def load_counter(self):
         if not os.path.exists(self.counter_file):
@@ -94,7 +110,126 @@ class SecureCounter:
         return counter
 
     def get_counter(self):
-        return self.load_counter()
+        self.counter = self.load_counter()
+        return self.counter
+
+
+class License:
+    def __init__(self, file_path=BASE_PATH + 'license_data.json'):
+        self.last_check = None  # Last time the license was checked
+        self.is_valid = False  # If the license is valid
+        self.plan = None  # License plan: "starter", "pro", or "max"
+        self.user_id = ""  # User ID associated with the license
+        self.subscription_id = ""  # Subscription ID associated with the license
+        self.telegram_id = ""  # Telegram ID associated with the license
+        self.file_path = file_path  # File path to save/load license data
+        self.server_url = "https://auth.telegramforward.com/2d7c1802be269cdf3312809a54a48b80"
+        self.load_license_data()
+
+    def set_user_info(self, uid, subscription_id, telegram_id):
+        """
+        Set the user-specific information: user_id, subscription_id, telegram_id
+        """
+        self.user_id = uid
+        self.subscription_id = subscription_id
+        self.telegram_id = telegram_id
+        self.is_valid = False
+
+    def check_license(self):
+        """
+        Send a POST request to the server to check the license, including user-specific data.
+        """
+        if not self.user_id or not self.subscription_id or not self.telegram_id:
+            return False, f"You need to fill Customer ID and Subscription ID under 'License' before adding a new Rule."
+
+        # Check if the license is still valid and checked within the last 24 hours
+        if self.is_license_valid():
+            logging.info("License is valid and was checked within the last 24 hours.")
+            return True, "License is valid"
+
+        # if invalid check from server
+        try:
+            # Prepare data to send in the POST request
+            data = {
+                'user_id': self.user_id,
+                'subscription_id': self.subscription_id,
+                'telegram_id': self.telegram_id
+            }
+
+            response = requests.post(self.server_url, json=data)
+            if response.status_code == 200:
+                license_data = response.json()
+                self.is_valid = (str(license_data['is_valid']) == "true")
+                self.plan = license_data['plan']
+                self.last_check = datetime.datetime.now().isoformat()
+                msg = license_data['message']
+                logging.info("License server check successful.")
+                if self.is_valid:
+                    self.save_license_data()
+                return self.is_valid, msg
+            else:
+                logging.info(f"Error checking license: {response.status_code}")
+                msg = f"Error checking license. Status Code: {response.status_code}"
+                return False, msg
+        except requests.exceptions.RequestException as e:
+            logging.info(f"Request failed: {e}")
+            return False
+
+    def is_license_valid(self):
+        """
+        Return True if the license is valid and the last check was less than 24 hours ago.
+        """
+        if not self.is_valid or not self.last_check:
+            logging.info(f"License invalid. is_valid: {self.is_valid} and last_check: {self.last_check}")
+            return False
+
+        last_check_datetime = datetime.datetime.fromisoformat(self.last_check)
+        if datetime.datetime.now() - last_check_datetime < datetime.timedelta(days=1):
+            return True
+        else:
+            return False
+
+    def save_license_data(self):
+        """
+        Save license and user information to a file.
+        """
+        license_data = {
+            'last_check': self.last_check,
+            'is_valid': self.is_valid,
+            'plan': self.plan,
+            'user_id': self.user_id,
+            'subscription_id': self.subscription_id,
+            'telegram_id': self.telegram_id
+        }
+
+        with open(self.file_path, 'w') as file:
+            json.dump(license_data, file)
+        logging.info(f"License data saved to {self.file_path}")
+
+    def load_license_data(self):
+        """
+        Load license and user information from a file, if it exists.
+        """
+        if os.path.exists(self.file_path):
+            with open(self.file_path, 'r') as file:
+                license_data = json.load(file)
+                self.last_check = license_data['last_check']
+                self.is_valid = license_data['is_valid']
+                self.plan = license_data['plan']
+                self.user_id = license_data['user_id']
+                self.subscription_id = license_data['subscription_id']
+                self.telegram_id = license_data['telegram_id']
+                logging.info(f"License data loaded from {self.file_path}")
+        else:
+            logging.info("License file not found. No data loaded.")
+            self.is_valid = False
+
+    def __str__(self):
+        return (
+            f"License (Plan: {self.plan}, Valid: {self.is_valid}, "
+            f"User ID: {self.user_id}, Subscription ID: {self.subscription_id}, "
+            f"Telegram ID: {self.telegram_id}, Last Check: {self.last_check})"
+        )
 
 
 class Rule:
@@ -153,6 +288,7 @@ def logger_init():
 
 q_listener, q = logger_init()
 license_counter = SecureCounter()
+license = License()
 
 
 def resource_path(relative_path):
@@ -165,10 +301,6 @@ def resource_path(relative_path):
 
 def list_to_string(l, sep):
     return sep.join(l)
-
-
-def str2bool(v):
-    return v.lower() in ("yes", "true", "t", "1")
 
 
 def string_to_bool(s_bool):
@@ -297,7 +429,7 @@ def gpt4_query(prompt, max_tokens=100):
                 "content": prompt,
             }
         ],
-        model="gpt-3.5-turbo",
+        model=plans[license.plan]["model"],
     )
     return chat_completion.choices[0].message.content
 
@@ -308,6 +440,7 @@ async def start_telegram_loop(uid):
     Starts a new thread for the GUI process
     :return: void
     """
+    global license
     logging.info(f"Telegram Client started Main Loop...")
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -319,7 +452,7 @@ async def start_telegram_loop(uid):
     @client.on(events.NewMessage(func=lambda e: e.is_channel or e.is_group))
     async def handler(event):
         try:
-            global license_counter
+            global license_counter, main_win
             sender = await event.get_sender()
 
             rules_local = get_rules_from_file()
@@ -328,6 +461,20 @@ async def start_telegram_loop(uid):
             is_rule, rules = find_rule_by_sender_id(sender.id, rules_local)
 
             if is_rule:
+                res, msg = license.check_license()
+                if not res:
+                    logging.error("license is expired or invalid.")
+                    if main_win is not None:
+                        main_win[("license_key", 0)].update(button_color=("white", "red"))
+                    return
+
+                if int(license_counter.counter) > plans[license.plan]["messages"]:
+                    logging.error(
+                        f"License messages Limit reached. {int(license_counter.get_counter())} / {plans[license.plan]["messages"]}")
+                    if main_win is not None:
+                        main_win[("license_key", 0)].update(button_color=("maroon", "yellow"))
+                    return
+
                 msg = event.message
                 for r in rules:
                     to_chat = int(r.to_id)
@@ -338,17 +485,14 @@ async def start_telegram_loop(uid):
                             logging.info(final_prompt)
                             gpt_res = gpt4_query(final_prompt)
                             current_count = license_counter.increment_counter()  # Incrementa e ottiene il contatore
-                            print(f"Contatore attuale: {current_count}")
+                            logging.info(
+                                f"Current message counter: {current_count} / {plans[license.plan]["messages"]}")
                             await client.send_message(to_chat, gpt_res, silent=False)
                         else:
                             await client.send_message(to_chat, msg, silent=False)
 
         except Exception as e:
             logging.error("Error: " + str(e))
-
-    @client.on(events.MessageEdited())
-    async def handlerEdited(e):
-        print("EDITED: " + str(e))
 
     await client.run_until_disconnected()
 
@@ -633,18 +777,6 @@ def change_mod_rule(w, num_rule, disable=False):
     w[('gpt_in', num_rule)].update(disabled=disable)
 
 
-# Frame Based dashboard
-
-def get_license_layout():
-    license_layout = [
-        [sg.Text('API KEY', size=(20, 1)), sg.InputText("", size=(80, 1))],
-        [sg.Text('SECRET KEY', size=(20, 1)), sg.InputText("", size=(80, 1))],
-        [sg.HorizontalSeparator()],
-        [sg.Button('Update', key='update'), sg.Button('Close', key='close', button_color=('white', 'firebrick'))],
-    ]
-    return license_layout
-
-
 def get_main_layout():
     header = [
         [sg.Text('Forward Rules', justification="center", text_color="black", font=("", 20, "bold"))],
@@ -739,8 +871,58 @@ def remove_rule(r_id):
             break
 
 
+def bind_license_UI():
+    global license, main_win
+    license_layout = [
+        [sg.Text('Customer ID: ', size=(20, 1)),
+         sg.InputText(license.user_id, key="client_id", size=(35, 1))],
+        [sg.Text('Subscription ID: ', size=(20, 1)),
+         sg.InputText(license.subscription_id, key="subscription_id", size=(35, 1))],
+        [sg.HorizontalSeparator()],
+        [sg.Button('Update', key='update'), sg.Button('Close', key='close', button_color=('white', 'firebrick'))],
+    ]
+
+    window2 = sg.Window('Telegram Forward License',
+                        license_layout,
+                        icon=resource_path('logoFS.ico'),
+                        )
+
+    # Loop taking in user input and querying queue
+    while True:
+        # Wake every 100ms and look for work
+        event, values = window2.read(timeout=100)
+        if event in (sg.WIN_CLOSED, 'Exit'):
+            window2.close()
+            break
+
+        if event in 'update':
+            license.set_user_info(values['client_id'], values['subscription_id'], user_id)
+            res, msg = license.check_license()
+            if res:
+                sg.Popup('Success!', 'Your License is active.\nEnjoy using Telegram Forward!',
+                         icon=resource_path('logoFS.ico'))
+
+                if main_win is not None:
+                    main_win[("license_key", 0)].update(button_color=("maroon", "light green"))
+
+                window2.close()
+            else:
+                sg.Popup(msg +
+                         '\n\nYou can contact our support team at support@telegramforward.com',
+                         icon=resource_path('logoFS.ico'))
+
+                if main_win is not None:
+                    main_win[("license_key", 0)].update(button_color=("white", "red"))
+
+
+        elif event in 'close':
+            break
+
+    window2.close()
+
+
 def bind_main_UI(telegram_process):
-    global rules_list, ADD_WIN
+    global rules_list, license, main_win
 
     logout_flag = False
     running_process = telegram_process
@@ -762,6 +944,12 @@ def bind_main_UI(telegram_process):
         main_win[('filter_in', r.rule_id)].update(",".join(r.keywords))
         main_win[('gpt_in', r.rule_id)].update(r.prompt_gpt)
         change_mod_rule(main_win, r.rule_id, disable=True)
+
+    res, msg = license.check_license()
+    if res:
+        main_win[("license_key", 0)].update(button_color=("maroon", "light green"))
+    else:
+        main_win[("license_key", 0)].update(button_color=("white", "red"))
 
     logging.info("Binding Main UI...")
     try:
@@ -791,12 +979,22 @@ def bind_main_UI(telegram_process):
                     break
 
                 if event[0] == "add_rule":
-                    window['-WARNING-'].update(visible=False)
-                    window.metadata += 1
-                    channels = get_rows_from_channel_list(get_all_channels())
-                    window.extend_layout(window['-RULE SECTION-'], [item_row(window.metadata, channels)])
-                    window.visibility_changed()
-                    window['-RULE SECTION-'].contents_changed()
+                    res, msg = license.check_license()
+                    if res:
+                        window['-WARNING-'].update(visible=False)
+                        window.metadata += 1
+                        channels = get_rows_from_channel_list(get_all_channels())
+                        window.extend_layout(window['-RULE SECTION-'], [item_row(window.metadata, channels)])
+                        window.visibility_changed()
+                        window['-RULE SECTION-'].contents_changed()
+                        main_win[("license_key", 0)].update(button_color=("maroon", "light green"))
+                    else:
+                        sg.popup("ERROR",
+                                 msg +
+                                 '\n\nYou can contact our support team at support@telegramforward.com',
+                                 icon=resource_path('logoFS.ico'))
+                        main_win[("license_key", 0)].update(button_color=("white", "red"))
+
 
                 elif event[0] == '-DEL-':
                     res = sg.popup_ok_cancel('Warning: Are you sure you want to delete this rule?',
@@ -854,6 +1052,8 @@ def bind_main_UI(telegram_process):
 
                             window.visibility_changed()
                             window['-RULE SECTION-'].contents_changed()
+                if event[0] == "license_key":
+                    bind_license_UI()
 
         if logout_flag:
             os.remove(BASE_PATH + "tf_session.session")
@@ -876,16 +1076,6 @@ def bind_auth_UI():
 
         if check_status_start_thread():
             logging.warning("Already logged in...")
-
-            # Protezione
-            if username != "valentino_dicianni" and username != "Michjr17" and username != "ChrBosco":
-                sg.Popup('Error!', 'Account not allowed.',
-                         icon=resource_path('logoFS.ico'))
-                os.remove(BASE_PATH + "tf_session.session")
-                if os.path.exists(BASE_PATH + "tf_session.session-journal"):
-                    os.remove(BASE_PATH + "tf_session.session-journal")
-                return False
-
             res = get_channels_start_thread()
             if res != ERROR:
                 proc = telegram_loop_start_process()
@@ -952,8 +1142,8 @@ if __name__ == "__main__":
     freeze_support()
     logging.info("======### SESSION START ###=====")
     logging.info("Building UI...")
-    # import pyi_splash
-    # pyi_splash.close()
+    import pyi_splash
+    pyi_splash.close()
     bind_auth_UI()
     logging.info("======### SESSION END ###=====\n")
     q_listener.stop()
