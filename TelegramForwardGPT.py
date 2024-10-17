@@ -9,6 +9,8 @@ import sys
 import time
 from logging.handlers import QueueListener, RotatingFileHandler
 from multiprocessing import freeze_support
+from pprint import pprint
+
 import requests
 import json
 import PySimpleGUI as sg
@@ -173,7 +175,7 @@ class License:
                 self.plan = license_data['plan']
                 self.last_check = datetime.datetime.now().isoformat()
                 msg = license_data['message']
-                logging.info("License server check successful.")
+                logging.info(f"License server check successful. Is valid: {self.is_valid} - {msg}")
                 if self.is_valid:
                     self.save_license_data()
                 return self.is_valid, msg
@@ -247,10 +249,11 @@ class License:
 
 
 class Rule:
-    def __init__(self, rule_id, form_id, to_id, prompt_gpt="", keywords=None):
+    def __init__(self, rule_id, form_id, to_id, include_media, prompt_gpt="", keywords=None):
         self.rule_id = rule_id
         self.from_id = int(form_id)
         self.to_id = int(to_id)
+        self.include_media = bool(include_media)
         self.keywords = [] if keywords is None else keywords
         self.prompt_gpt = prompt_gpt
 
@@ -259,6 +262,7 @@ class Rule:
         split_str = string_rule.split('->')
         from_id = split_str[0]
         to_id = split_str[1]
+        media = string_to_bool(split_str[-1])
         keys_list = None
         prompt = None
         if len(split_str) > 2 and split_str[2].strip() != "":
@@ -266,7 +270,7 @@ class Rule:
         if len(split_str) > 3 and split_str[3].strip() != "":
             prompt = split_str[3].strip()
             prompt = "" if prompt == "None" else prompt
-        return cls(index, from_id, to_id, prompt_gpt=prompt, keywords=keys_list)
+        return cls(index, from_id, to_id, media, prompt_gpt=prompt, keywords=keys_list)
 
     def rule_to_string(self):
         base_str = f"From: {self.from_id} To: {self.to_id}"
@@ -275,10 +279,11 @@ class Rule:
         if self.prompt_gpt != "":
             base_str += f" - PromptGPT: {self.prompt_gpt}"
 
+        base_str += f" - IncludeMedia: {self.include_media}"
         return base_str
 
     def rule_to_file(self):
-        return f"{self.from_id}->{self.to_id}->{','.join(self.keywords)}->{self.prompt_gpt}"
+        return f"{self.from_id}->{self.to_id}->{','.join(self.keywords)}->{self.prompt_gpt}->{self.include_media}"
 
 
 def logger_init():
@@ -495,6 +500,10 @@ async def start_telegram_loop(uid):
                     to_chat = int(r.to_id)
 
                     if find_keyword_in_msg(r, msg.text):
+
+                        if not r.include_media:
+                            msg.media = None
+
                         if r.prompt_gpt != "" and r.prompt_gpt is not None and r.prompt_gpt != "None":
                             final_prompt = f"{str(r.prompt_gpt)} '{str(msg.text)}'"
                             logging.info(final_prompt)
@@ -502,9 +511,9 @@ async def start_telegram_loop(uid):
                             current_count = license_counter.increment_counter()  # Incrementa e ottiene il contatore
                             logging.info(
                                 f"Current message counter: {current_count} / {plans[license_key.plan]["messages"]}")
-                            await client.send_message(to_chat, gpt_res, silent=False)
-                        else:
-                            await client.send_message(to_chat, msg, silent=False)
+                            msg.text = gpt_res
+
+                        await client.send_message(to_chat, msg, silent=False)
 
         except Exception as e:
             logging.error("Error: " + str(e))
@@ -777,6 +786,10 @@ def item_row(item_num, chats):
         [
             sg.Text(f'GPT Modification: ', k=('gpt', item_num), size=(15, 1)),
             sg.Multiline(size=(35, 3), k=('gpt_in', item_num)),
+        ],
+        [
+            # sg.Text(f'Include Media: ', k=('media', item_num), size=(15, 1)),
+            sg.Checkbox(size=(35, 3), k=('media_in', item_num), text="Include Media"),
         ]
     ]
 
@@ -790,6 +803,7 @@ def change_mod_rule(w, num_rule, disable=False):
     w[('destination_in', num_rule)].update(disabled=disable)
     w[('filter_in', num_rule)].update(disabled=disable)
     w[('gpt_in', num_rule)].update(disabled=disable)
+    w[('media_in', num_rule)].update(disabled=disable)
 
 
 def get_main_layout():
@@ -874,6 +888,7 @@ def upsert_rule(new_r: Rule):
             r.to_id = new_r.to_id
             r.keywords = new_r.keywords
             r.prompt_gpt = new_r.prompt_gpt
+            r.include_media = new_r.include_media
             return
     # if not found
     rules_list.append(new_r)
@@ -933,7 +948,6 @@ def bind_license_UI():
                 if main_win is not None:
                     main_win[("license_key", 0)].update(button_color=("white", "red"))
 
-
         elif event in 'close':
             break
 
@@ -962,6 +976,7 @@ def bind_main_UI(telegram_process):
         main_win[('destination_in', r.rule_id)].update(get_selected_row_from_channel_list(get_all_channels(), r.to_id))
         main_win[('filter_in', r.rule_id)].update(",".join(r.keywords))
         main_win[('gpt_in', r.rule_id)].update(r.prompt_gpt)
+        main_win[('media_in', r.rule_id)].update(value=r.include_media)
         change_mod_rule(main_win, r.rule_id, disable=True)
 
     res, msg = license_key.check_license()
@@ -1039,8 +1054,10 @@ def bind_main_UI(telegram_process):
                         source_channel = values[('source_in', event[1])].split()[0]
                         dest_channel = values[('destination_in', event[1])].split()[0]
                         prompt = values[('gpt_in', event[1])]
+                        media = bool(values[('media_in', event[1])])
 
-                        new_r = Rule(event[1], source_channel, dest_channel, keywords=keywords, prompt_gpt=prompt)
+                        new_r = Rule(event[1], source_channel, dest_channel, media, keywords=keywords,
+                                     prompt_gpt=prompt)
                         upsert_rule(new_r)
                         logging.info("Added new rule: " + new_r.rule_to_string())
                         dump_rules_to_file(rules_list)
