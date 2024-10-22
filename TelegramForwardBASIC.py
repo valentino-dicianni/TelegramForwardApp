@@ -171,8 +171,8 @@ class License:
             response = requests.post(self.server_url, json=data)
             if response.status_code == 200:
                 license_data = response.json()
-                if license_data['plan'] == "basic":
-                    msg = "Error: this app is for GPT plans only, your subscription is for the Basic plan."
+                if license_data['plan'] != "basic":
+                    msg = "Error: this app is for Basic plans only, please download the correct one and try again."
                     return False, msg
 
                 self.is_valid = (str(license_data['is_valid']) == "true")
