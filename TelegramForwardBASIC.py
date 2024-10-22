@@ -28,6 +28,10 @@ ERROR = -1
 valid_license = False
 rules_list = []
 plans = {
+    "basic": {
+        "model": "",
+        "messages": 10000
+    },
     "starter": {
         "model": "gpt-3.5-turbo",
         "messages": 3000
@@ -307,7 +311,6 @@ def logger_init():
 
 
 q_listener, q = logger_init()
-license_counter = SecureCounter()
 license_key = License()
 
 
@@ -784,10 +787,6 @@ def item_row(item_num, chats):
             sg.Input(size=(35, 1), k=('filter_in', item_num)),
         ],
         [
-            sg.Text(f'GPT Modification: ', k=('gpt', item_num), size=(15, 1)),
-            sg.Multiline(size=(35, 3), k=('gpt_in', item_num)),
-        ],
-        [
             # sg.Text(f'Include Media: ', k=('media', item_num), size=(15, 1)),
             sg.Checkbox(size=(35, 3), k=('media_in', item_num), text="Include Media"),
         ]
@@ -802,7 +801,6 @@ def change_mod_rule(w, num_rule, disable=False):
     w[('source_in', num_rule)].update(disabled=disable)
     w[('destination_in', num_rule)].update(disabled=disable)
     w[('filter_in', num_rule)].update(disabled=disable)
-    w[('gpt_in', num_rule)].update(disabled=disable)
     w[('media_in', num_rule)].update(disabled=disable)
 
 
@@ -975,7 +973,6 @@ def bind_main_UI(telegram_process):
         main_win[('source_in', r.rule_id)].update(get_selected_row_from_channel_list(get_all_channels(), r.from_id))
         main_win[('destination_in', r.rule_id)].update(get_selected_row_from_channel_list(get_all_channels(), r.to_id))
         main_win[('filter_in', r.rule_id)].update(",".join(r.keywords))
-        main_win[('gpt_in', r.rule_id)].update(r.prompt_gpt)
         main_win[('media_in', r.rule_id)].update(value=r.include_media)
         change_mod_rule(main_win, r.rule_id, disable=True)
 
@@ -1053,7 +1050,7 @@ def bind_main_UI(telegram_process):
                             ('filter_in', event[1])].strip().split(',')
                         source_channel = values[('source_in', event[1])].split()[0]
                         dest_channel = values[('destination_in', event[1])].split()[0]
-                        prompt = values[('gpt_in', event[1])]
+                        prompt = ""
                         media = bool(values[('media_in', event[1])])
 
                         new_r = Rule(event[1], source_channel, dest_channel, media, keywords=keywords,
@@ -1083,7 +1080,6 @@ def bind_main_UI(telegram_process):
                             window[('source_in', r.rule_id)].update(value=r.from_id)
                             window[('destination_in', r.rule_id)].update(value=r.to_id)
                             window[('filter_in', r.rule_id)].update(value=r.keywords)
-                            window[('gpt_in', r.rule_id)].update(value=r.prompt_gpt)
                             change_mod_rule(window, r.rule_id, disable=True)
 
                             window.visibility_changed()
