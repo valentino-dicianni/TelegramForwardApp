@@ -581,7 +581,7 @@ async def check_telegram_user_state():
     if me is not None:
         username = str(me.username)
         user_id = str(me.id)
-        user_photo = await client.download_profile_photo('me')
+        user_photo = await client.download_profile_photo('me', file=BASE_PATH)
         await create_rounded_image(user_photo, profile_photo_path)
         os.remove(user_photo)
 
@@ -1180,8 +1180,8 @@ if __name__ == "__main__":
     freeze_support()
     logging.info("======### SESSION START ###=====")
     logging.info("Building UI...")
-    import pyi_splash
-    pyi_splash.close()
+    # import pyi_splash
+    # pyi_splash.close()
     bind_auth_UI()
     logging.info("======### SESSION END ###=====\n")
     q_listener.stop()

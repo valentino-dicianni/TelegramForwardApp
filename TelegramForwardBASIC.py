@@ -584,7 +584,7 @@ async def check_telegram_user_state():
     if me is not None:
         username = str(me.username)
         user_id = str(me.id)
-        user_photo = await client.download_profile_photo('me')
+        user_photo = await client.download_profile_photo('me', file=BASE_PATH)
         await create_rounded_image(user_photo, profile_photo_path)
         os.remove(user_photo)
 
