@@ -1,10 +1,13 @@
 import asyncio
+import base64
 import concurrent.futures
+import ctypes
 import datetime
 import io
 import logging
 import multiprocessing
 import os
+import platform
 import sys
 import time
 from logging.handlers import QueueListener, RotatingFileHandler
@@ -15,12 +18,9 @@ import requests
 import json
 import PySimpleGUI as sg
 from PIL import Image, ImageDraw
+from cryptography.fernet import Fernet
 from openai import OpenAI
 from telethon import TelegramClient, events
-import platform
-from cryptography.fernet import Fernet
-import base64
-import ctypes
 
 THEME = 'LightGray3'
 ERROR = -1
@@ -85,7 +85,10 @@ class SecureCounter:
     def save_counter(self, counter):
         fernet = Fernet(self.key)
         encrypted_counter = fernet.encrypt(str(counter).encode())
-        os.remove(self.counter_file)
+
+        if os.path.exists(self.counter_file):
+            os.remove(self.counter_file)
+
         with open(self.counter_file, 'wb') as f:
             f.write(encrypted_counter)
 
@@ -97,6 +100,7 @@ class SecureCounter:
     def load_counter(self):
         if not os.path.exists(self.counter_file):
             return 0
+
         fernet = Fernet(self.key)
         with open(self.counter_file, 'rb') as file:
             encrypted_counter = file.read()

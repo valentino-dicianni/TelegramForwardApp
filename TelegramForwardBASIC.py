@@ -89,7 +89,10 @@ class SecureCounter:
     def save_counter(self, counter):
         fernet = Fernet(self.key)
         encrypted_counter = fernet.encrypt(str(counter).encode())
-        os.remove(self.counter_file)
+
+        if os.path.exists(self.counter_file):
+            os.remove(self.counter_file)
+
         with open(self.counter_file, 'wb') as f:
             f.write(encrypted_counter)
 
